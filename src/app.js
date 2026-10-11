@@ -12,6 +12,10 @@ const ApiError = require("./utils/apiError");
 
 const app = express();
 
+// Trust reverse proxy (Render, Heroku, Vercel, AWS)
+// Required for express-rate-limit and accurate client IP resolution from X-Forwarded-For
+app.set("trust proxy", 1);
+
 // Security HTTP headers
 app.use(helmet());
 
@@ -19,8 +23,14 @@ app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
-      if (!origin || env.ALLOWED_ORIGINS.includes(origin) || env.NODE_ENV === "development") {
+      // Allow requests with no origin (like mobile apps, curl, or same-origin)
+      if (
+        !origin ||
+        env.ALLOWED_ORIGINS.includes("*") ||
+        env.ALLOWED_ORIGINS.includes(origin) ||
+        origin.endsWith(".vercel.app") ||
+        env.NODE_ENV === "development"
+      ) {
         return callback(null, true);
       }
       return callback(new Error("CORS policy violation: Origin not allowed"));

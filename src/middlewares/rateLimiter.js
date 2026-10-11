@@ -9,6 +9,7 @@ const apiLimiter = rateLimit({
   max: env.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
   message: {
     success: false,
     statusCode: 429,
@@ -24,6 +25,7 @@ const submissionLimiter = rateLimit({
   max: 20, // 20 submissions per hour per IP
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false },
   message: {
     success: false,
     statusCode: 429,
