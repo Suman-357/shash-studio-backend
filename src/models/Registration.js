@@ -98,10 +98,27 @@ const registrationSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["upi", "card", "netbanking", "whatsapp_manual"],
+      enum: ["upi", "card", "netbanking", "whatsapp_manual", "razorpay"],
       default: "upi"
     },
     upiReference: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    // Razorpay payment tracking fields
+    razorpayOrderId: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    razorpayPaymentId: {
+      type: String,
+      trim: true,
+      default: "",
+      index: true
+    },
+    razorpaySignature: {
       type: String,
       trim: true,
       default: ""

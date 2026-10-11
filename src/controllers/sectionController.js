@@ -2,64 +2,6 @@ const Section = require("../models/Section");
 const ApiResponse = require("../utils/apiResponse");
 const ApiError = require("../utils/apiError");
 
-// Seed default sections if collection is empty
-const seedDefaultSections = async () => {
-  const count = await Section.countDocuments();
-  if (count === 0) {
-    await Section.insertMany([
-      {
-        slug: "yoga",
-        name: "Yoga & Movement",
-        nameKn: "ಯೋಗ ಮತ್ತು ಚಲನೆ",
-        icon: "self_improvement",
-        emoji: "🧘‍♀️",
-        tagline: "Authentic Mysuru Vinyasa, Hatha Yoga, Strength Training & Daily Sadhana",
-        taglineKn: "ಸಾಂಪ್ರದಾಯಿಕ ಮೈಸೂರು ಶೈಲಿಯ ಹಠ ಯೋಗ, ವಿನ್ಯಾಸ ಮತ್ತು ಶಕ್ತಿ ತರಬೇತಿ",
-        badge: "Mysuru Shala Lineage",
-        badgeKn: "ಮೈಸೂರು ಶಾಲಾ ಪರಂಪರೆ",
-        accentColor: "#1C3325",
-        lightBg: "bg-[#F4F8F5]",
-        borderCol: "border-[#1C3325]/15",
-        order: 1,
-        isActive: true
-      },
-      {
-        slug: "music",
-        name: "Music & Sound",
-        nameKn: "ಸಂಗೀತ ಮತ್ತು ನಾದ ಧ್ಯಾನ",
-        icon: "music_note",
-        emoji: "🎵",
-        tagline: "Carnatic classical, Devara Nama, acoustic flute resonance, and Sushii Nights",
-        taglineKn: "ಕರ್ನಾಟಕ ಶಾಸ್ತ್ರೀಯ ಸಂಗೀತ, ದೇವರನಾಮ, ಬಿದಿರಿನ ಕೊಳಲು ಮತ್ತು ನಿದ್ರಾ ಧ್ಯಾನ",
-        badge: "Acoustic Healing",
-        badgeKn: "ನಾದ ಚಿಕಿತ್ಸೆ",
-        accentColor: "#2F3E46",
-        lightBg: "bg-[#F3F6F8]",
-        borderCol: "border-[#2F3E46]/15",
-        order: 2,
-        isActive: true
-      },
-      {
-        slug: "other",
-        name: "Wellness & Retreats",
-        nameKn: "ಇತರ ಕ್ಷೇಮ & ತರಬೇತಿ",
-        icon: "forest",
-        emoji: "🍃",
-        tagline: "Postpartum Maathru Samskaara, Fit & Flow, Chamundi walks, and retreats",
-        taglineKn: "ಮಾತೃ ಸಂಸ್ಕಾರ, ಫಿಟ್ & ಫ್ಲೋ, ಚಾಮುಂಡಿ ಬೆಟ್ಟದ ನಡಿಗೆ ಮತ್ತು ವಿಶೇಷ ತರಬೇತಿ",
-        badge: "Holistic Lifestyle",
-        badgeKn: "ಸಮಗ್ರ ಜೀವನಶೈಲಿ",
-        accentColor: "#C26D38",
-        lightBg: "bg-[#FDF6F0]",
-        borderCol: "border-[#C26D38]/15",
-        order: 3,
-        isActive: true
-      }
-    ]);
-    console.log("🌿 Initial Default Sections seeded into MongoDB");
-  }
-};
-
 /**
  * @desc    Get all active sections
  * @route   GET /api/v1/sections
@@ -67,7 +9,6 @@ const seedDefaultSections = async () => {
  */
 const getSections = async (req, res, next) => {
   try {
-    await seedDefaultSections();
     const sections = await Section.find({ isActive: true }).sort({ order: 1, createdAt: 1 });
     return ApiResponse.success(res, sections, "Sections retrieved successfully");
   } catch (error) {

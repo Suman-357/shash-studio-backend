@@ -93,6 +93,15 @@ const workshopSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    order: {
+      type: Number,
+      default: 1,
+      index: true,
+    },
+    batchSchedule: {
+      type: String,
+      trim: true,
+    },
     image: {
       type: String,
       required: true,

@@ -8,6 +8,7 @@ const inquiryRoutes = require("./inquiryRoutes");
 const authRoutes = require("./authRoutes");
 const sectionRoutes = require("./sectionRoutes");
 const productRoutes = require("./productRoutes");
+const paymentRoutes = require("./paymentRoutes");
 
 // Health check
 router.get("/health", (req, res) => {
@@ -27,5 +28,6 @@ router.use("/inquiries", inquiryRoutes);
 router.use("/auth", authRoutes);
 router.use("/sections", sectionRoutes);
 router.use("/products", productRoutes);
+router.use("/payments", paymentRoutes);
 
 module.exports = router;

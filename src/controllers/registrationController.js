@@ -35,37 +35,48 @@ const createRegistration = async (req, res, next) => {
       req.ip ||
       "";
 
-    // Check if workshop exists (optional if local id)
-    let finalAmount = amount;
-    if (!finalAmount) {
-      const workshop = await Workshop.findOne({
-        $or: [{ _id: workshopId.match(/^[0-9a-fA-F]{24}$/) ? workshopId : null }, { slug: workshopId }]
-      });
-      if (workshop) {
-        finalAmount = workshop.price;
-      } else {
-        finalAmount = 499; // Default fallback price
-      }
+    // Guarantee workshop price is resolved directly from database
+    const isObjectId = typeof workshopId === "string" && Boolean(workshopId.match(/^[0-9a-fA-F]{24}$/));
+    const workshop = await Workshop.findOne({
+      $or: [
+        { slug: String(workshopId).toLowerCase().trim() },
+        ...(isObjectId ? [{ _id: workshopId }] : []),
+      ]
+    });
+
+    if (!workshop) {
+      return next(ApiError.notFound(`Workshop offering "${workshopId}" not found in database.`));
     }
 
+    if (typeof workshop.spotsLeft === "number" && workshop.spotsLeft <= 0) {
+      return next(ApiError.badRequest(`This workshop batch is fully booked. Please choose another offering or contact us on WhatsApp.`));
+    }
+
+    if (typeof fullName !== "string" || typeof whatsapp !== "string" || typeof email !== "string") {
+      return next(ApiError.badRequest("Invalid input format for student registration details."));
+    }
+
+    const finalAmount = workshop.price;
+    const finalTitle = workshop.title;
+
     const registration = await Registration.create({
-      fullName,
-      whatsapp,
-      email,
-      workshopId,
-      workshopTitle: workshopTitle || "SHASH Studios Batch",
+      fullName: fullName.trim(),
+      whatsapp: whatsapp.trim(),
+      email: email.trim().toLowerCase(),
+      workshopId: workshop.slug || workshopId,
+      workshopTitle: finalTitle || workshopTitle || "SHASH Studios Batch",
       slot,
       originalSlotSnapshot: {
         slotTime: slot,
-        batchTitle: workshopTitle || "SHASH Studios Batch",
+        batchTitle: finalTitle || workshopTitle || "SHASH Studios Batch",
         bookedAt: new Date()
       },
       amount: finalAmount,
       languagePref: languagePref || "both",
       healthNotes: healthNotes || "beginner",
-      paymentMethod: paymentMethod || "upi",
+      paymentMethod: paymentMethod || "razorpay",
       upiReference: upiReference || "",
-      paymentStatus: "completed", // Direct enrollment
+      paymentStatus: "pending", // All bookings start as pending until verified by Razorpay or confirmed by Admin
       consentGiven: true,
       consentTimestamp: new Date(),
       consentIp: clientIp

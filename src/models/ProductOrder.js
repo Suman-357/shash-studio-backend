@@ -57,7 +57,7 @@ const productOrderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["cod", "upi", "bank_transfer"],
+      enum: ["cod", "upi", "bank_transfer", "razorpay"],
       default: "cod"
     },
     orderStatus: {
@@ -76,6 +76,23 @@ const productOrderSchema = new mongoose.Schema(
     },
     orderNotes: {
       type: String,
+      default: ""
+    },
+    // Razorpay payment tracking fields
+    razorpayOrderId: {
+      type: String,
+      trim: true,
+      default: ""
+    },
+    razorpayPaymentId: {
+      type: String,
+      trim: true,
+      default: "",
+      index: true
+    },
+    razorpaySignature: {
+      type: String,
+      trim: true,
       default: ""
     }
   },

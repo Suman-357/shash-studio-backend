@@ -20,7 +20,7 @@ const getWorkshops = async (req, res, next) => {
       query.category = category;
     }
 
-    const workshops = await Workshop.find(query).sort({ price: 1 });
+    const workshops = await Workshop.find(query).sort({ order: 1, createdAt: 1 });
     return ApiResponse.success(res, workshops, "Workshops fetched successfully");
   } catch (error) {
     next(error);

@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Batch = require("../models/Batch");
 const Registration = require("../models/Registration");
 const Workshop = require("../models/Workshop");
@@ -14,7 +15,21 @@ const getBatches = async (req, res, next) => {
     const { workshopId, status, search } = req.query;
     const query = {};
 
-    if (workshopId) query.workshopId = workshopId;
+    if (workshopId) {
+      if (mongoose.Types.ObjectId.isValid(workshopId)) {
+        query.workshopId = workshopId;
+      } else {
+        const matchingWorkshop = await Workshop.findOne({
+          $or: [{ slug: workshopId }, { _id: mongoose.Types.ObjectId.isValid(workshopId) ? workshopId : null }]
+        });
+        if (matchingWorkshop) {
+          query.workshopId = matchingWorkshop._id;
+        } else {
+          // If workshopId doesn't match any workshop, return empty
+          return ApiResponse.success(res, [], "No batches found for workshop");
+        }
+      }
+    }
     if (status) query.status = status;
     if (search) {
       query.$or = [
@@ -35,7 +50,8 @@ const getBatches = async (req, res, next) => {
           $or: [
             { batchId: batch._id },
             { slot: batch.slotTime }
-          ]
+          ],
+          paymentStatus: "completed"
         });
         const batchObj = batch.toObject();
         batchObj.enrolledCount = actualCount;
@@ -65,12 +81,13 @@ const getBatchById = async (req, res, next) => {
       return next(ApiError.notFound("Batch not found"));
     }
 
-    // Get all students enrolled in this batch or slot
+    // Get all confirmed students enrolled in this batch or slot
     const students = await Registration.find({
       $or: [
         { batchId: batch._id },
         { slot: batch.slotTime }
-      ]
+      ],
+      paymentStatus: "completed"
     }).sort({ createdAt: -1 });
 
     const batchData = batch.toObject();
@@ -260,8 +277,9 @@ const getBatchStats = async (req, res, next) => {
     ]);
     const totalRevenue = revenueAgg[0]?.totalRevenue || 0;
 
-    // Slot distribution breakdown
+    // Slot distribution breakdown for paid registrations
     const slotDistribution = await Registration.aggregate([
+      { $match: { paymentStatus: "completed" } },
       {
         $group: {
           _id: "$slot",

@@ -34,6 +34,15 @@ app.use(
 // Gzip compression
 app.use(compression());
 
+// Raw body capture for Razorpay webhook signature verification
+// Must come BEFORE the standard JSON body parser
+app.use("/api/v1/payments/webhook", express.json({
+  limit: "20kb",
+  verify: (req, _res, buf) => {
+    req.rawBody = buf.toString();
+  }
+}));
+
 // Body parsers with safe payload limits
 app.use(express.json({ limit: "20kb" }));
 app.use(express.urlencoded({ extended: true, limit: "20kb" }));
