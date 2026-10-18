@@ -44,25 +44,10 @@ const createOrder = async (req, res, next) => {
         return next(ApiError.badRequest("workshopId (slug or _id) is required for workshop payments."));
       }
 
-      const rawSlug = String(workshopId).toLowerCase().trim().replace(/_/g, "-");
-      const aliasMap = {
-        combo: "combo-pass",
-        "all-access": "combo-pass",
-        ladies: "ladies-yoga",
-        strength: "strength-training",
-        kids: "kids-yoga",
-        ashtanga: "ashtanga-yoga",
-        "sushii-nights": "sushii-nights",
-        "sushii_nights": "sushii-nights"
-      };
-      const resolvedSlug = aliasMap[rawSlug] || rawSlug;
       const isObjectId = typeof workshopId === "string" && Boolean(workshopId.match(/^[0-9a-fA-F]{24}$/));
-
       const workshop = await Workshop.findOne({
         $or: [
-          { slug: resolvedSlug },
-          { slug: rawSlug },
-          { slug: workshopId.toLowerCase() },
+          { slug: String(workshopId).toLowerCase().trim() },
           ...(isObjectId ? [{ _id: workshopId }] : []),
         ],
       });
