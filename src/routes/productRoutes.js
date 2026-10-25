@@ -11,10 +11,11 @@ const {
   updateProductOrderStatus
 } = require("../controllers/productController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { submissionLimiter } = require("../middlewares/rateLimiter");
 
 // Public routes
 router.get("/", getProducts);
-router.post("/orders", createProductOrder);
+router.post("/orders", submissionLimiter, createProductOrder);
 router.get("/:idOrSlug", getProductByIdOrSlug);
 
 // Admin-protected routes

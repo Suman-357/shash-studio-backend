@@ -176,6 +176,10 @@ const createProductOrder = async (req, res, next) => {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const orderId = `SHASH-MAT-${Date.now().toString().slice(-4)}${randomSuffix}`;
 
+    // For Razorpay online payments, start with pending_payment status until verified
+    const isOnlinePayment = paymentMethod === "razorpay";
+    const initialStatus = isOnlinePayment ? "pending_payment" : "confirmed";
+
     const order = await ProductOrder.create({
       orderId,
       productId: product._id,
@@ -188,11 +192,12 @@ const createProductOrder = async (req, res, next) => {
       email: (email || "").trim(),
       shippingAddress,
       paymentMethod,
+      orderStatus: initialStatus,
       orderNotes: orderNotes || ""
     });
 
-    // Decrement stock inventory
-    if (typeof product.stockQuantity === "number") {
+    // Only decrement stock immediately for COD/offline orders. Online orders decrement upon payment verification.
+    if (!isOnlinePayment && typeof product.stockQuantity === "number") {
       product.stockQuantity = Math.max(0, product.stockQuantity - numQty);
       if (product.stockQuantity === 0) {
         product.inStock = false;

@@ -9,6 +9,17 @@ const ApiResponse = require("../utils/apiResponse");
 const ApiError = require("../utils/apiError");
 
 /**
+ * Constant-time comparison helper to prevent side-channel timing attacks
+ */
+const timingSafeEqual = (a, b) => {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+};
+
+/**
  * @desc    Create a Razorpay order (server-side)
  * @route   POST /api/v1/payments/create-order
  * @access  Public
@@ -19,7 +30,9 @@ const ApiError = require("../utils/apiError");
  *  - productId   : slug or _id (required when type = "product")
  *  - quantity    : number (only for products, default 1)
  *  - receipt     : optional short string for your reference
- *  - notes       : optional object { customerName, ... }
+ *  - notes       : optional object { customerName, bookingId, orderId, ... }
+ *  - bookingId   : optional booking reference for workshop
+ *  - orderId     : optional order reference for product
  *
  * The amount is ALWAYS fetched from the database — never trusted from the client.
  */
@@ -33,12 +46,14 @@ const createOrder = async (req, res, next) => {
       currency = "INR",
       receipt,
       notes = {},
+      bookingId,
+      orderId,
     } = req.body;
 
     let amountInRupees = 0;
     let itemTitle = "";
 
-    // ──── Resolve price from database ────
+    // ──── Resolve price strictly from database ────
     if (type === "workshop") {
       if (!workshopId) {
         return next(ApiError.badRequest("workshopId (slug or _id) is required for workshop payments."));
@@ -93,14 +108,37 @@ const createOrder = async (req, res, next) => {
 
     const amountInPaise = Math.round(amountInRupees * 100);
 
+    const resolvedBookingId = bookingId || notes.bookingId;
+    const resolvedOrderId = orderId || notes.orderId;
+
     const options = {
       amount: amountInPaise,
       currency,
       receipt: receipt || `rcpt_${type}_${Date.now()}`,
-      notes: { ...notes, type, itemTitle },
+      notes: {
+        ...notes,
+        ...(resolvedBookingId && { bookingId: String(resolvedBookingId).toUpperCase() }),
+        ...(resolvedOrderId && { orderId: String(resolvedOrderId) }),
+        type,
+        itemTitle,
+      },
     };
 
     const order = await razorpay.orders.create(options);
+
+    // Cryptographically/Data-bind the Razorpay Order ID to the existing registration or product order record
+    if (resolvedBookingId) {
+      await Registration.findOneAndUpdate(
+        { bookingId: String(resolvedBookingId).toUpperCase() },
+        { razorpayOrderId: order.id }
+      );
+    }
+    if (resolvedOrderId) {
+      await ProductOrder.findOneAndUpdate(
+        { orderId: String(resolvedOrderId) },
+        { razorpayOrderId: order.id }
+      );
+    }
 
     return ApiResponse.success(
       res,
@@ -148,17 +186,21 @@ const verifyPayment = async (req, res, next) => {
       return next(ApiError.badRequest("Missing Razorpay payment verification parameters."));
     }
 
-    // ---- Signature verification ----
+    if (!env.RAZORPAY_KEY_SECRET) {
+      return next(ApiError.internal("Payment gateway secret is not configured on server."));
+    }
+
+    // 1. ---- Constant-Time Signature verification ----
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", env.RAZORPAY_KEY_SECRET)
       .update(body)
       .digest("hex");
 
-    const isAuthentic = expectedSignature === razorpay_signature;
+    const isAuthentic = timingSafeEqual(expectedSignature, razorpay_signature);
 
     if (!isAuthentic) {
-      // Signature mismatch — potential tamper
+      // Signature mismatch — potential tampering attempt
       if (type === "workshop" && bookingId) {
         await Registration.findOneAndUpdate(
           { bookingId: bookingId.toUpperCase() },
@@ -174,13 +216,49 @@ const verifyPayment = async (req, res, next) => {
       return next(ApiError.badRequest("Payment verification failed. Signature mismatch."));
     }
 
-    // ---- Valid payment — update records ----
+    // 2. ---- Replay / Double-Spending Prevention ----
+    // Ensure this payment ID has not already been claimed by a different booking or order
+    if (type === "workshop") {
+      const existingPayment = await Registration.findOne({
+        razorpayPaymentId: razorpay_payment_id,
+        bookingId: { $ne: bookingId ? bookingId.toUpperCase() : "" },
+      });
+      if (existingPayment) {
+        return next(ApiError.badRequest("This payment has already been credited to another booking."));
+      }
+    } else if (type === "product") {
+      const existingPayment = await ProductOrder.findOne({
+        razorpayPaymentId: razorpay_payment_id,
+        orderId: { $ne: orderId || "" },
+      });
+      if (existingPayment) {
+        return next(ApiError.badRequest("This payment has already been credited to another product order."));
+      }
+    }
+
+    // 3. ---- Fetch order from Razorpay gateway to cross-verify amount & metadata ----
+    let rzpOrder = null;
+    try {
+      rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
+    } catch (fetchErr) {
+      console.warn("Could not fetch order from Razorpay for validation:", fetchErr.message);
+    }
+
+    // 4. ---- Valid payment — update records idempotently ----
     let updatedRecord = null;
 
     if (type === "workshop" && bookingId) {
       const reg = await Registration.findOne({ bookingId: bookingId.toUpperCase() });
       if (!reg) {
         return next(ApiError.notFound(`Registration record not found for booking: ${bookingId}`));
+      }
+
+      // Verify that paid amount strictly matches registration amount
+      if (rzpOrder && typeof reg.amount === "number") {
+        const expectedPaise = Math.round(reg.amount * 100);
+        if (rzpOrder.amount !== expectedPaise) {
+          return next(ApiError.badRequest("Paid amount does not match workshop registration amount."));
+        }
       }
 
       const isAlreadyCompleted = reg.paymentStatus === "completed";
@@ -207,12 +285,34 @@ const verifyPayment = async (req, res, next) => {
         return next(ApiError.notFound(`Product order not found: ${orderId}`));
       }
 
+      // Verify that paid amount strictly matches product total amount
+      if (rzpOrder && typeof prodOrder.totalAmount === "number") {
+        const expectedPaise = Math.round(prodOrder.totalAmount * 100);
+        if (rzpOrder.amount !== expectedPaise) {
+          return next(ApiError.badRequest("Paid amount does not match product order total."));
+        }
+      }
+
+      const wasAlreadyConfirmed = prodOrder.orderStatus === "confirmed";
+
       prodOrder.paymentMethod = "razorpay";
       prodOrder.orderStatus = "confirmed";
       prodOrder.razorpayOrderId = razorpay_order_id;
       prodOrder.razorpayPaymentId = razorpay_payment_id;
       prodOrder.razorpaySignature = razorpay_signature;
       updatedRecord = await prodOrder.save();
+
+      // Decrement inventory stock once upon verified payment
+      if (!wasAlreadyConfirmed) {
+        const prod = await Product.findById(prodOrder.productId);
+        if (prod && typeof prod.stockQuantity === "number") {
+          prod.stockQuantity = Math.max(0, prod.stockQuantity - prodOrder.quantity);
+          if (prod.stockQuantity === 0) {
+            prod.inStock = false;
+          }
+          await prod.save();
+        }
+      }
     }
 
     return ApiResponse.success(
@@ -257,18 +357,29 @@ const handleWebhook = async (req, res, next) => {
   try {
     const webhookSecret = env.RAZORPAY_WEBHOOK_SECRET;
 
-    // If a webhook secret is configured, verify the signature
-    if (webhookSecret) {
-      const receivedSignature = req.headers["x-razorpay-signature"];
-      const expectedSignature = crypto
-        .createHmac("sha256", webhookSecret)
-        .update(JSON.stringify(req.body))
-        .digest("hex");
+    // Fail closed: Never process webhooks if secret is not configured
+    if (!webhookSecret) {
+      console.error("Razorpay webhook received but RAZORPAY_WEBHOOK_SECRET is not configured.");
+      return res.status(500).json({ success: false, message: "Webhook secret not configured on server" });
+    }
 
-      if (receivedSignature !== expectedSignature) {
-        console.warn("Webhook signature mismatch — ignoring event.");
-        return res.status(400).json({ success: false, message: "Invalid webhook signature" });
-      }
+    const receivedSignature = req.headers["x-razorpay-signature"];
+    if (!receivedSignature) {
+      return res.status(400).json({ success: false, message: "Missing Razorpay signature header" });
+    }
+
+    // Must use rawBody captured in app.js before JSON parsing to preserve exact payload formatting
+    const rawPayload = req.rawBody || JSON.stringify(req.body);
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(rawPayload)
+      .digest("hex");
+
+    const isMatch = timingSafeEqual(expectedSignature, receivedSignature);
+
+    if (!isMatch) {
+      console.warn("Webhook signature mismatch — rejecting forged or corrupt event.");
+      return res.status(400).json({ success: false, message: "Invalid webhook signature" });
     }
 
     const event = req.body.event;
@@ -284,27 +395,44 @@ const handleWebhook = async (req, res, next) => {
 
     switch (event) {
       case "payment.captured": {
-        // Update workshop registration if applicable
+        // Idempotently update workshop registration if applicable
         if (notes.bookingId) {
-          await Registration.findOneAndUpdate(
-            { bookingId: notes.bookingId.toUpperCase() },
-            {
-              paymentStatus: "completed",
-              razorpayOrderId: rzpOrderId,
-              razorpayPaymentId: rzpPaymentId,
-            }
-          );
+          const reg = await Registration.findOne({ bookingId: notes.bookingId.toUpperCase() });
+          if (reg && reg.paymentStatus !== "completed") {
+            reg.paymentStatus = "completed";
+            reg.paymentMethod = "razorpay";
+            reg.razorpayOrderId = rzpOrderId;
+            reg.razorpayPaymentId = rzpPaymentId;
+            await reg.save();
+
+            // Decrement workshop spot
+            await Workshop.findOneAndUpdate(
+              { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
+              { $inc: { spotsLeft: -1 } }
+            );
+          }
         }
-        // Update product order if applicable
+
+        // Idempotently update product order if applicable
         if (notes.orderId) {
-          await ProductOrder.findOneAndUpdate(
-            { orderId: notes.orderId },
-            {
-              orderStatus: "confirmed",
-              razorpayOrderId: rzpOrderId,
-              razorpayPaymentId: rzpPaymentId,
+          const prodOrder = await ProductOrder.findOne({ orderId: notes.orderId });
+          if (prodOrder && prodOrder.orderStatus !== "confirmed") {
+            prodOrder.orderStatus = "confirmed";
+            prodOrder.paymentMethod = "razorpay";
+            prodOrder.razorpayOrderId = rzpOrderId;
+            prodOrder.razorpayPaymentId = rzpPaymentId;
+            await prodOrder.save();
+
+            // Decrement inventory stock
+            const prod = await Product.findById(prodOrder.productId);
+            if (prod && typeof prod.stockQuantity === "number") {
+              prod.stockQuantity = Math.max(0, prod.stockQuantity - prodOrder.quantity);
+              if (prod.stockQuantity === 0) {
+                prod.inStock = false;
+              }
+              await prod.save();
             }
-          );
+          }
         }
         break;
       }
@@ -312,13 +440,13 @@ const handleWebhook = async (req, res, next) => {
       case "payment.failed": {
         if (notes.bookingId) {
           await Registration.findOneAndUpdate(
-            { bookingId: notes.bookingId.toUpperCase() },
+            { bookingId: notes.bookingId.toUpperCase(), paymentStatus: { $ne: "completed" } },
             { paymentStatus: "failed" }
           );
         }
         if (notes.orderId) {
           await ProductOrder.findOneAndUpdate(
-            { orderId: notes.orderId },
+            { orderId: notes.orderId, orderStatus: { $ne: "confirmed" } },
             { orderStatus: "cancelled" }
           );
         }

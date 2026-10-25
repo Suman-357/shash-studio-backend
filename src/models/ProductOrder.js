@@ -62,7 +62,7 @@ const productOrderSchema = new mongoose.Schema(
     },
     orderStatus: {
       type: String,
-      enum: ["confirmed", "processing", "dispatched", "delivered", "cancelled"],
+      enum: ["pending_payment", "confirmed", "processing", "dispatched", "delivered", "cancelled"],
       default: "confirmed",
       index: true
     },
