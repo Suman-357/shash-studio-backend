@@ -28,7 +28,6 @@ app.use(
         !origin ||
         env.ALLOWED_ORIGINS.includes("*") ||
         env.ALLOWED_ORIGINS.includes(origin) ||
-        origin.endsWith(".vercel.app") ||
         env.NODE_ENV === "development"
       ) {
         return callback(null, true);

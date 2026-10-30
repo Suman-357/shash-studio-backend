@@ -16,13 +16,14 @@ router.route("/")
   .post(submissionLimiter, validateRegistration, createRegistration)
   .get(protect, getRegistrations);
 
-// Public student booking lookup by Phone, Email, or Booking ID
+// Public student booking lookup by Phone, Email, or Booking ID (rate-limited)
 router.route("/my-bookings")
-  .get(getMyBookings)
-  .post(getMyBookings);
+  .get(submissionLimiter, getMyBookings)
+  .post(submissionLimiter, getMyBookings);
 
+// Admin-only direct registration lookup by booking ID
 router.route("/:bookingId")
-  .get(getRegistrationByBookingId);
+  .get(protect, getRegistrationByBookingId);
 
 router.route("/:bookingId/status")
   .patch(protect, updatePaymentStatus);

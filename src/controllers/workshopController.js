@@ -20,7 +20,7 @@ const getWorkshops = async (req, res, next) => {
       query.category = category;
     }
 
-    const workshops = await Workshop.find(query).sort({ order: 1, createdAt: 1 });
+    const workshops = await Workshop.find(query).select("-zoomLink").sort({ order: 1, createdAt: 1 });
     return ApiResponse.success(res, workshops, "Workshops fetched successfully");
   } catch (error) {
     next(error);
@@ -38,9 +38,9 @@ const getWorkshopById = async (req, res, next) => {
     let workshop;
 
     if (idOrSlug.match(/^[0-9a-fA-F]{24}$/)) {
-      workshop = await Workshop.findById(idOrSlug);
+      workshop = await Workshop.findById(idOrSlug).select("-zoomLink");
     } else {
-      workshop = await Workshop.findOne({ slug: idOrSlug.toLowerCase() });
+      workshop = await Workshop.findOne({ slug: idOrSlug.toLowerCase() }).select("-zoomLink");
     }
 
     if (!workshop) {

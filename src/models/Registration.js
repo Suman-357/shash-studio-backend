@@ -93,13 +93,13 @@ const registrationSchema = new mongoose.Schema(
     paymentStatus: {
       type: String,
       enum: ["pending", "completed", "failed", "refunded"],
-      default: "completed", // By default marked completed for instant demo enrollment
+      default: "pending",
       index: true
     },
     paymentMethod: {
       type: String,
       enum: ["upi", "card", "netbanking", "whatsapp_manual", "razorpay"],
-      default: "upi"
+      default: "razorpay"
     },
     upiReference: {
       type: String,

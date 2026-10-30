@@ -129,19 +129,26 @@ const createProductOrder = async (req, res, next) => {
   try {
     const {
       productId,
-      productTitle,
-      unitPrice,
       quantity = 1,
       customerName,
       phone,
       email,
       shippingAddress,
-      paymentMethod = "cod",
       orderNotes
     } = req.body;
 
     if (!productId || !customerName || !phone || !shippingAddress || !shippingAddress.street || !shippingAddress.city || !shippingAddress.pincode) {
       return next(ApiError.badRequest("Please provide product details, customer name, phone, and complete shipping address"));
+    }
+
+    const cleanedPhone = String(phone).replace(/[^0-9]/g, "");
+    if (!/^[0-9]{10,12}$/.test(cleanedPhone)) {
+      return next(ApiError.badRequest("Please provide a valid 10 to 12 digit phone number."));
+    }
+
+    const cleanedPincode = String(shippingAddress.pincode).trim();
+    if (!/^[0-9]{6}$/.test(cleanedPincode)) {
+      return next(ApiError.badRequest("Please provide a valid 6-digit pincode."));
     }
 
     // Resolve price strictly from database
@@ -160,7 +167,7 @@ const createProductOrder = async (req, res, next) => {
       return next(ApiError.badRequest(`"${product.title}" is currently out of stock.`));
     }
 
-    const numQty = Math.max(1, Math.floor(Number(quantity) || 1));
+    const numQty = Math.max(1, Math.min(10, Math.floor(Number(quantity) || 1)));
     if (typeof product.stockQuantity === "number" && product.stockQuantity < numQty) {
       return next(
         ApiError.badRequest(
@@ -170,40 +177,36 @@ const createProductOrder = async (req, res, next) => {
     }
 
     const price = product.price;
+    if (typeof price !== "number" || price <= 0) {
+      return next(ApiError.badRequest("Invalid product price configured."));
+    }
     const totalAmount = price * numQty;
 
     // Generate unique order ID
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const orderId = `SHASH-MAT-${Date.now().toString().slice(-4)}${randomSuffix}`;
 
-    // For Razorpay online payments, start with pending_payment status until verified
-    const isOnlinePayment = paymentMethod === "razorpay";
-    const initialStatus = isOnlinePayment ? "pending_payment" : "confirmed";
-
+    // All public orders require online Razorpay verification before confirmation and stock deduction
     const order = await ProductOrder.create({
       orderId,
-      productId: product._id,
+      productId: String(product._id),
       productTitle: product.title,
       unitPrice: price,
       quantity: numQty,
       totalAmount,
-      customerName: customerName.trim(),
-      phone: phone.trim(),
-      email: (email || "").trim(),
-      shippingAddress,
-      paymentMethod,
-      orderStatus: initialStatus,
-      orderNotes: orderNotes || ""
+      customerName: String(customerName).trim(),
+      phone: cleanedPhone,
+      email: String(email || "").trim().toLowerCase(),
+      shippingAddress: {
+        street: String(shippingAddress.street).trim(),
+        city: String(shippingAddress.city).trim(),
+        state: String(shippingAddress.state || "Karnataka").trim(),
+        pincode: cleanedPincode
+      },
+      paymentMethod: "razorpay",
+      orderStatus: "pending_payment",
+      orderNotes: String(orderNotes || "").trim()
     });
-
-    // Only decrement stock immediately for COD/offline orders. Online orders decrement upon payment verification.
-    if (!isOnlinePayment && typeof product.stockQuantity === "number") {
-      product.stockQuantity = Math.max(0, product.stockQuantity - numQty);
-      if (product.stockQuantity === 0) {
-        product.inStock = false;
-      }
-      await product.save();
-    }
 
     return ApiResponse.created(
       res,

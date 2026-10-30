@@ -24,17 +24,9 @@ const timingSafeEqual = (a, b) => {
  * @route   POST /api/v1/payments/create-order
  * @access  Public
  *
- * Body:
- *  - type        : "workshop" | "product"
- *  - workshopId  : slug or _id (required when type = "workshop")
- *  - productId   : slug or _id (required when type = "product")
- *  - quantity    : number (only for products, default 1)
- *  - receipt     : optional short string for your reference
- *  - notes       : optional object { customerName, bookingId, orderId, ... }
- *  - bookingId   : optional booking reference for workshop
- *  - orderId     : optional order reference for product
- *
- * The amount is ALWAYS fetched from the database — never trusted from the client.
+ * Strictly binds the Razorpay order and amount to the existing database
+ * Registration (bookingId) or ProductOrder (orderId) record to prevent
+ * price-swapping or cross-item substitution attacks.
  */
 const createOrder = async (req, res, next) => {
   try {
@@ -42,7 +34,7 @@ const createOrder = async (req, res, next) => {
       type = "workshop",
       workshopId,
       productId,
-      quantity = 1,
+      quantity,
       currency = "INR",
       receipt,
       notes = {},
@@ -50,53 +42,124 @@ const createOrder = async (req, res, next) => {
       orderId,
     } = req.body;
 
+    const resolvedBookingId = (bookingId || notes.bookingId || "").trim().toUpperCase();
+    const resolvedOrderId = (orderId || notes.orderId || "").trim();
+
     let amountInRupees = 0;
     let itemTitle = "";
 
-    // ──── Resolve price strictly from database ────
+    // ──── 1. Workshop Payment Order ────
     if (type === "workshop") {
-      if (!workshopId) {
-        return next(ApiError.badRequest("workshopId (slug or _id) is required for workshop payments."));
+      if (!resolvedBookingId) {
+        return next(ApiError.badRequest("bookingId is required to create a workshop payment order."));
       }
 
-      const isObjectId = typeof workshopId === "string" && Boolean(workshopId.match(/^[0-9a-fA-F]{24}$/));
+      const reg = await Registration.findOne({ bookingId: resolvedBookingId });
+      if (!reg) {
+        return next(ApiError.notFound(`Registration record not found for booking: ${resolvedBookingId}`));
+      }
+
+      if (reg.paymentStatus === "completed") {
+        return next(ApiError.badRequest("This workshop registration has already been paid."));
+      }
+
+      // Resolve workshop from the registration's bound workshopId
+      const targetWorkshopId = reg.workshopId;
+      const isObjectId = typeof targetWorkshopId === "string" && Boolean(targetWorkshopId.match(/^[0-9a-fA-F]{24}$/));
       const workshop = await Workshop.findOne({
         $or: [
-          { slug: String(workshopId).toLowerCase().trim() },
-          ...(isObjectId ? [{ _id: workshopId }] : []),
+          { slug: String(targetWorkshopId).toLowerCase().trim() },
+          ...(isObjectId ? [{ _id: targetWorkshopId }] : []),
         ],
       });
 
-      if (!workshop) {
-        return next(ApiError.notFound(`Workshop not found: ${workshopId}`));
+      if (!workshop || !workshop.isActive) {
+        return next(ApiError.notFound(`Workshop not found or inactive: ${targetWorkshopId}`));
+      }
+
+      // Reject if client attempted to pass a mismatched workshopId
+      if (
+        workshopId &&
+        String(workshopId).toLowerCase().trim() !== workshop.slug &&
+        String(workshopId).trim() !== String(workshop._id)
+      ) {
+        return next(ApiError.badRequest("Workshop mismatch with registration record."));
+      }
+
+      if (typeof workshop.spotsLeft === "number" && workshop.spotsLeft <= 0) {
+        return next(ApiError.badRequest("This workshop batch is currently full."));
+      }
+
+      if (typeof workshop.price !== "number" || workshop.price <= 0) {
+        return next(ApiError.badRequest("This workshop requires direct inquiry and cannot be paid online."));
       }
 
       amountInRupees = workshop.price;
       itemTitle = workshop.title;
 
+      // Ensure registration amount is synced with authoritative workshop price
+      reg.amount = amountInRupees;
+      await reg.save();
+
+    // ──── 2. Product Payment Order ────
     } else if (type === "product") {
-      if (!productId) {
-        return next(ApiError.badRequest("productId (slug or _id) is required for product payments."));
+      if (!resolvedOrderId) {
+        return next(ApiError.badRequest("orderId is required to create a product payment order."));
       }
 
-      const isObjectId = typeof productId === "string" && Boolean(productId.match(/^[0-9a-fA-F]{24}$/));
+      const prodOrder = await ProductOrder.findOne({ orderId: resolvedOrderId });
+      if (!prodOrder) {
+        return next(ApiError.notFound(`Product order not found: ${resolvedOrderId}`));
+      }
+
+      if (prodOrder.orderStatus !== "pending_payment") {
+        return next(ApiError.badRequest(`Order ${resolvedOrderId} is already ${prodOrder.orderStatus}.`));
+      }
+
+      const isObjectId = typeof prodOrder.productId === "string" && Boolean(prodOrder.productId.match(/^[0-9a-fA-F]{24}$/));
       const product = await Product.findOne({
         $or: [
-          { slug: String(productId).toLowerCase().trim() },
-          ...(isObjectId ? [{ _id: productId }] : []),
+          ...(isObjectId ? [{ _id: prodOrder.productId }] : []),
+          { slug: String(prodOrder.productId).toLowerCase().trim() },
         ],
       });
 
       if (!product) {
-        return next(ApiError.notFound(`Product not found: ${productId}`));
+        return next(ApiError.notFound("Product associated with this order was not found."));
       }
+
       if (!product.inStock) {
         return next(ApiError.badRequest(`"${product.title}" is currently out of stock.`));
       }
 
-      const qty = Math.max(1, Math.floor(Number(quantity)));
-      amountInRupees = product.price * qty;
+      // Reject if client passed a mismatched productId or quantity
+      if (
+        productId &&
+        String(productId).toLowerCase().trim() !== product.slug &&
+        String(productId).trim() !== String(product._id)
+      ) {
+        return next(ApiError.badRequest("Product mismatch with order record."));
+      }
+
+      if (quantity !== undefined && Number(quantity) !== prodOrder.quantity) {
+        return next(ApiError.badRequest("Order quantity mismatch."));
+      }
+
+      if (typeof product.stockQuantity === "number" && product.stockQuantity < prodOrder.quantity) {
+        return next(
+          ApiError.badRequest(
+            `Only ${product.stockQuantity} unit(s) left in stock for "${product.title}".`
+          )
+        );
+      }
+
+      amountInRupees = product.price * prodOrder.quantity;
       itemTitle = product.title;
+
+      // Sync authoritative price on order record
+      prodOrder.unitPrice = product.price;
+      prodOrder.totalAmount = amountInRupees;
+      await prodOrder.save();
 
     } else {
       return next(ApiError.badRequest("type must be 'workshop' or 'product'."));
@@ -108,34 +171,33 @@ const createOrder = async (req, res, next) => {
 
     const amountInPaise = Math.round(amountInRupees * 100);
 
-    const resolvedBookingId = bookingId || notes.bookingId;
-    const resolvedOrderId = orderId || notes.orderId;
+    // Enforce sanitized server-authoritative notes
+    const safeNotes = {
+      type,
+      itemTitle,
+      ...(resolvedBookingId && { bookingId: resolvedBookingId }),
+      ...(resolvedOrderId && { orderId: resolvedOrderId }),
+    };
 
     const options = {
       amount: amountInPaise,
-      currency,
+      currency: "INR",
       receipt: receipt || `rcpt_${type}_${Date.now()}`,
-      notes: {
-        ...notes,
-        ...(resolvedBookingId && { bookingId: String(resolvedBookingId).toUpperCase() }),
-        ...(resolvedOrderId && { orderId: String(resolvedOrderId) }),
-        type,
-        itemTitle,
-      },
+      notes: safeNotes,
     };
 
     const order = await razorpay.orders.create(options);
 
     // Cryptographically/Data-bind the Razorpay Order ID to the existing registration or product order record
-    if (resolvedBookingId) {
+    if (type === "workshop" && resolvedBookingId) {
       await Registration.findOneAndUpdate(
-        { bookingId: String(resolvedBookingId).toUpperCase() },
+        { bookingId: resolvedBookingId },
         { razorpayOrderId: order.id }
       );
     }
-    if (resolvedOrderId) {
+    if (type === "product" && resolvedOrderId) {
       await ProductOrder.findOneAndUpdate(
-        { orderId: String(resolvedOrderId) },
+        { orderId: resolvedOrderId },
         { razorpayOrderId: order.id }
       );
     }
@@ -145,12 +207,8 @@ const createOrder = async (req, res, next) => {
       {
         orderId: order.id,
         amount: order.amount,
-        amountInRupees,
         currency: order.currency,
-        receipt: order.receipt,
-        status: order.status,
-        itemTitle,
-        key: env.RAZORPAY_KEY_ID, // safe to expose — this is the public key
+        key: env.RAZORPAY_KEY_ID,
       },
       "Razorpay order created successfully"
     );
@@ -164,12 +222,6 @@ const createOrder = async (req, res, next) => {
  * @desc    Verify Razorpay payment signature & finalise booking
  * @route   POST /api/v1/payments/verify
  * @access  Public
- *
- * Body:
- *  razorpay_order_id, razorpay_payment_id, razorpay_signature
- *  type              : "workshop" | "product"
- *  bookingId         : SHASH-XXXXXX  (for workshop)
- *  orderId           : SHASH-MAT-... (for product)
  */
 const verifyPayment = async (req, res, next) => {
   try {
@@ -186,6 +238,18 @@ const verifyPayment = async (req, res, next) => {
       return next(ApiError.badRequest("Missing Razorpay payment verification parameters."));
     }
 
+    if (type !== "workshop" && type !== "product") {
+      return next(ApiError.badRequest("Invalid payment type."));
+    }
+
+    if (type === "workshop" && !bookingId) {
+      return next(ApiError.badRequest("bookingId is required for workshop payment verification."));
+    }
+
+    if (type === "product" && !orderId) {
+      return next(ApiError.badRequest("orderId is required for product payment verification."));
+    }
+
     if (!env.RAZORPAY_KEY_SECRET) {
       return next(ApiError.internal("Payment gateway secret is not configured on server."));
     }
@@ -200,65 +264,70 @@ const verifyPayment = async (req, res, next) => {
     const isAuthentic = timingSafeEqual(expectedSignature, razorpay_signature);
 
     if (!isAuthentic) {
-      // Signature mismatch — potential tampering attempt
       if (type === "workshop" && bookingId) {
         await Registration.findOneAndUpdate(
-          { bookingId: bookingId.toUpperCase() },
+          { bookingId: String(bookingId).toUpperCase(), paymentStatus: { $ne: "completed" } },
           { paymentStatus: "failed" }
         );
       }
       if (type === "product" && orderId) {
         await ProductOrder.findOneAndUpdate(
-          { orderId },
+          { orderId: String(orderId), orderStatus: { $ne: "confirmed" } },
           { orderStatus: "cancelled" }
         );
       }
       return next(ApiError.badRequest("Payment verification failed. Signature mismatch."));
     }
 
-    // 2. ---- Replay / Double-Spending Prevention ----
-    // Ensure this payment ID has not already been claimed by a different booking or order
-    if (type === "workshop") {
-      const existingPayment = await Registration.findOne({
+    // 2. ---- Cross-Collection Replay / Double-Spending Prevention ----
+    const normalizedBookingId = bookingId ? String(bookingId).toUpperCase() : "";
+    const normalizedOrderId = orderId ? String(orderId) : "";
+
+    const [claimedByRegistration, claimedByProductOrder] = await Promise.all([
+      Registration.findOne({
         razorpayPaymentId: razorpay_payment_id,
-        bookingId: { $ne: bookingId ? bookingId.toUpperCase() : "" },
-      });
-      if (existingPayment) {
-        return next(ApiError.badRequest("This payment has already been credited to another booking."));
-      }
-    } else if (type === "product") {
-      const existingPayment = await ProductOrder.findOne({
+        ...(type === "workshop" ? { bookingId: { $ne: normalizedBookingId } } : {}),
+      }),
+      ProductOrder.findOne({
         razorpayPaymentId: razorpay_payment_id,
-        orderId: { $ne: orderId || "" },
-      });
-      if (existingPayment) {
-        return next(ApiError.badRequest("This payment has already been credited to another product order."));
-      }
+        ...(type === "product" ? { orderId: { $ne: normalizedOrderId } } : {}),
+      }),
+    ]);
+
+    if (claimedByRegistration || claimedByProductOrder) {
+      return next(ApiError.badRequest("This payment ID has already been claimed by another order."));
     }
 
-    // 3. ---- Fetch order from Razorpay gateway to cross-verify amount & metadata ----
+    // 3. ---- Fetch order from Razorpay gateway (Fail-Closed) ----
     let rzpOrder = null;
     try {
       rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
     } catch (fetchErr) {
-      console.warn("Could not fetch order from Razorpay for validation:", fetchErr.message);
+      console.error("Failed to fetch order from Razorpay for verification:", fetchErr.message);
+      return next(ApiError.internal("Unable to verify order details with payment gateway. Please try again."));
     }
 
-    // 4. ---- Valid payment — update records idempotently ----
+    if (!rzpOrder || !rzpOrder.amount) {
+      return next(ApiError.badRequest("Invalid order returned from payment gateway."));
+    }
+
+    // 4. ---- Validate Order Binding & Amount, Then Update Record Idempotently ----
     let updatedRecord = null;
 
-    if (type === "workshop" && bookingId) {
-      const reg = await Registration.findOne({ bookingId: bookingId.toUpperCase() });
+    if (type === "workshop") {
+      const reg = await Registration.findOne({ bookingId: normalizedBookingId });
       if (!reg) {
-        return next(ApiError.notFound(`Registration record not found for booking: ${bookingId}`));
+        return next(ApiError.notFound(`Registration record not found for booking: ${normalizedBookingId}`));
       }
 
-      // Verify that paid amount strictly matches registration amount
-      if (rzpOrder && typeof reg.amount === "number") {
-        const expectedPaise = Math.round(reg.amount * 100);
-        if (rzpOrder.amount !== expectedPaise) {
-          return next(ApiError.badRequest("Paid amount does not match workshop registration amount."));
-        }
+      // Enforce strict binding: the Razorpay order ID must match the one generated for this booking
+      if (!reg.razorpayOrderId || reg.razorpayOrderId !== razorpay_order_id) {
+        return next(ApiError.badRequest("Order ID does not match this workshop booking."));
+      }
+
+      const expectedPaise = Math.round((reg.amount || 0) * 100);
+      if (expectedPaise <= 0 || rzpOrder.amount !== expectedPaise) {
+        return next(ApiError.badRequest("Paid amount does not match workshop registration amount."));
       }
 
       const isAlreadyCompleted = reg.paymentStatus === "completed";
@@ -279,18 +348,20 @@ const verifyPayment = async (req, res, next) => {
       }
     }
 
-    if (type === "product" && orderId) {
-      const prodOrder = await ProductOrder.findOne({ orderId });
+    if (type === "product") {
+      const prodOrder = await ProductOrder.findOne({ orderId: normalizedOrderId });
       if (!prodOrder) {
-        return next(ApiError.notFound(`Product order not found: ${orderId}`));
+        return next(ApiError.notFound(`Product order not found: ${normalizedOrderId}`));
       }
 
-      // Verify that paid amount strictly matches product total amount
-      if (rzpOrder && typeof prodOrder.totalAmount === "number") {
-        const expectedPaise = Math.round(prodOrder.totalAmount * 100);
-        if (rzpOrder.amount !== expectedPaise) {
-          return next(ApiError.badRequest("Paid amount does not match product order total."));
-        }
+      // Enforce strict binding: the Razorpay order ID must match the one generated for this product order
+      if (!prodOrder.razorpayOrderId || prodOrder.razorpayOrderId !== razorpay_order_id) {
+        return next(ApiError.badRequest("Order ID does not match this product order."));
+      }
+
+      const expectedPaise = Math.round((prodOrder.totalAmount || 0) * 100);
+      if (expectedPaise <= 0 || rzpOrder.amount !== expectedPaise) {
+        return next(ApiError.badRequest("Paid amount does not match product order total."));
       }
 
       const wasAlreadyConfirmed = prodOrder.orderStatus === "confirmed";
@@ -319,9 +390,21 @@ const verifyPayment = async (req, res, next) => {
       res,
       {
         verified: true,
-        razorpay_order_id,
-        razorpay_payment_id,
-        record: updatedRecord,
+        type,
+        ...(type === "workshop" && updatedRecord
+          ? {
+              bookingId: updatedRecord.bookingId,
+              paymentStatus: updatedRecord.paymentStatus,
+              amount: updatedRecord.amount,
+            }
+          : {}),
+        ...(type === "product" && updatedRecord
+          ? {
+              orderId: updatedRecord.orderId,
+              orderStatus: updatedRecord.orderStatus,
+              totalAmount: updatedRecord.totalAmount,
+            }
+          : {}),
       },
       "Payment verified and recorded successfully!"
     );
@@ -369,10 +452,13 @@ const handleWebhook = async (req, res, next) => {
     }
 
     // Must use rawBody captured in app.js before JSON parsing to preserve exact payload formatting
-    const rawPayload = req.rawBody || JSON.stringify(req.body);
+    if (!req.rawBody) {
+      return res.status(400).json({ success: false, message: "Missing raw webhook payload" });
+    }
+
     const expectedSignature = crypto
       .createHmac("sha256", webhookSecret)
-      .update(rawPayload)
+      .update(req.rawBody)
       .digest("hex");
 
     const isMatch = timingSafeEqual(expectedSignature, receivedSignature);
@@ -391,39 +477,45 @@ const handleWebhook = async (req, res, next) => {
 
     const rzpOrderId = paymentEntity.order_id;
     const rzpPaymentId = paymentEntity.id;
+    const paidAmountPaise = Number(paymentEntity.amount || 0);
     const notes = paymentEntity.notes || {};
+
+    if (!rzpOrderId) {
+      return res.status(200).json({ success: true, message: "Event acknowledged (no order_id)" });
+    }
 
     switch (event) {
       case "payment.captured": {
-        // Idempotently update workshop registration if applicable
-        if (notes.bookingId) {
-          const reg = await Registration.findOne({ bookingId: notes.bookingId.toUpperCase() });
-          if (reg && reg.paymentStatus !== "completed") {
+        // Lookup strictly by bound razorpayOrderId
+        const reg = await Registration.findOne({ razorpayOrderId: rzpOrderId });
+        if (reg && reg.paymentStatus !== "completed") {
+          const expectedPaise = Math.round((reg.amount || 0) * 100);
+          if (expectedPaise > 0 && paidAmountPaise === expectedPaise) {
             reg.paymentStatus = "completed";
             reg.paymentMethod = "razorpay";
-            reg.razorpayOrderId = rzpOrderId;
             reg.razorpayPaymentId = rzpPaymentId;
             await reg.save();
 
-            // Decrement workshop spot
             await Workshop.findOneAndUpdate(
               { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
               { $inc: { spotsLeft: -1 } }
             );
+          } else {
+            console.error(
+              `Webhook amount mismatch for booking ${reg.bookingId}: expected ${expectedPaise}, got ${paidAmountPaise}`
+            );
           }
         }
 
-        // Idempotently update product order if applicable
-        if (notes.orderId) {
-          const prodOrder = await ProductOrder.findOne({ orderId: notes.orderId });
-          if (prodOrder && prodOrder.orderStatus !== "confirmed") {
+        const prodOrder = await ProductOrder.findOne({ razorpayOrderId: rzpOrderId });
+        if (prodOrder && prodOrder.orderStatus !== "confirmed") {
+          const expectedPaise = Math.round((prodOrder.totalAmount || 0) * 100);
+          if (expectedPaise > 0 && paidAmountPaise === expectedPaise) {
             prodOrder.orderStatus = "confirmed";
             prodOrder.paymentMethod = "razorpay";
-            prodOrder.razorpayOrderId = rzpOrderId;
             prodOrder.razorpayPaymentId = rzpPaymentId;
             await prodOrder.save();
 
-            // Decrement inventory stock
             const prod = await Product.findById(prodOrder.productId);
             if (prod && typeof prod.stockQuantity === "number") {
               prod.stockQuantity = Math.max(0, prod.stockQuantity - prodOrder.quantity);
@@ -432,24 +524,24 @@ const handleWebhook = async (req, res, next) => {
               }
               await prod.save();
             }
+          } else {
+            console.error(
+              `Webhook amount mismatch for order ${prodOrder.orderId}: expected ${expectedPaise}, got ${paidAmountPaise}`
+            );
           }
         }
         break;
       }
 
       case "payment.failed": {
-        if (notes.bookingId) {
-          await Registration.findOneAndUpdate(
-            { bookingId: notes.bookingId.toUpperCase(), paymentStatus: { $ne: "completed" } },
-            { paymentStatus: "failed" }
-          );
-        }
-        if (notes.orderId) {
-          await ProductOrder.findOneAndUpdate(
-            { orderId: notes.orderId, orderStatus: { $ne: "confirmed" } },
-            { orderStatus: "cancelled" }
-          );
-        }
+        await Registration.findOneAndUpdate(
+          { razorpayOrderId: rzpOrderId, paymentStatus: { $ne: "completed" } },
+          { paymentStatus: "failed" }
+        );
+        await ProductOrder.findOneAndUpdate(
+          { razorpayOrderId: rzpOrderId, orderStatus: { $ne: "confirmed" } },
+          { orderStatus: "cancelled" }
+        );
         break;
       }
 

@@ -58,12 +58,12 @@ const productOrderSchema = new mongoose.Schema(
     paymentMethod: {
       type: String,
       enum: ["cod", "upi", "bank_transfer", "razorpay"],
-      default: "cod"
+      default: "razorpay"
     },
     orderStatus: {
       type: String,
       enum: ["pending_payment", "confirmed", "processing", "dispatched", "delivered", "cancelled"],
-      default: "confirmed",
+      default: "pending_payment",
       index: true
     },
     courierPartner: {

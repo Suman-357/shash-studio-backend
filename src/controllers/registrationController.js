@@ -44,8 +44,16 @@ const createRegistration = async (req, res, next) => {
       ]
     });
 
-    if (!workshop) {
-      return next(ApiError.notFound(`Workshop offering "${workshopId}" not found in database.`));
+    if (!workshop || !workshop.isActive) {
+      return next(ApiError.notFound(`Workshop offering "${workshopId}" not found or inactive.`));
+    }
+
+    if (typeof workshop.price !== "number" || workshop.price <= 0) {
+      return next(
+        ApiError.badRequest(
+          `This program requires direct fee inquiry on WhatsApp and cannot be booked via instant checkout.`
+        )
+      );
     }
 
     if (typeof workshop.spotsLeft === "number" && workshop.spotsLeft <= 0) {
@@ -74,8 +82,8 @@ const createRegistration = async (req, res, next) => {
       amount: finalAmount,
       languagePref: languagePref || "both",
       healthNotes: healthNotes || "beginner",
-      paymentMethod: paymentMethod || "razorpay",
-      upiReference: upiReference || "",
+      paymentMethod: "razorpay",
+      upiReference: "",
       paymentStatus: "pending", // All bookings start as pending until verified by Razorpay or confirmed by Admin
       consentGiven: true,
       consentTimestamp: new Date(),
@@ -219,7 +227,7 @@ const getMyBookings = async (req, res, next) => {
       );
     }
 
-    // Format safe response for student portal
+    // Format safe response for student portal (mask PII and do not expose private Zoom links publicly)
     const sanitizedBookings = bookings.map((b) => {
       const isPaid = b.paymentStatus === "completed";
       return {
@@ -236,9 +244,20 @@ const getMyBookings = async (req, res, next) => {
         languagePref: b.languagePref,
         healthNotes: b.healthNotes,
         zoomLink: isPaid
-          ? (b.batchId?.zoomLink || "https://zoom.us/j/shash-live-batch")
+          ? "Sent to your registered WhatsApp number"
           : "Available upon payment confirmation",
-        batch: b.batchId || null,
+        batch: b.batchId
+          ? {
+              batchCode: b.batchId.batchCode,
+              title: b.batchId.title,
+              titleKn: b.batchId.titleKn,
+              slotTime: b.batchId.slotTime,
+              startDate: b.batchId.startDate,
+              endDate: b.batchId.endDate,
+              instructorName: b.batchId.instructorName,
+              status: b.batchId.status
+            }
+          : null,
         createdAt: b.createdAt,
         updatedAt: b.updatedAt
       };

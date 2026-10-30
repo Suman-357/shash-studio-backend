@@ -1,4 +1,6 @@
 const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
+const env = require("../config/env");
 const Batch = require("../models/Batch");
 const Registration = require("../models/Registration");
 const Workshop = require("../models/Workshop");
@@ -43,6 +45,17 @@ const getBatches = async (req, res, next) => {
       .populate("workshopId", "title titleKn slug price category")
       .sort({ startDate: 1, slotTime: 1 });
 
+    // Only expose zoomLink if request carries a valid Admin JWT
+    let isAdminRequest = false;
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+      try {
+        jwt.verify(req.headers.authorization.split(" ")[1], env.JWT_SECRET);
+        isAdminRequest = true;
+      } catch (_err) {
+        isAdminRequest = false;
+      }
+    }
+
     // Calculate real-time counts from registrations
     const enhancedBatches = await Promise.all(
       batches.map(async (batch) => {
@@ -54,6 +67,9 @@ const getBatches = async (req, res, next) => {
           paymentStatus: "completed"
         });
         const batchObj = batch.toObject();
+        if (!isAdminRequest) {
+          delete batchObj.zoomLink;
+        }
         batchObj.enrolledCount = actualCount;
         batchObj.spotsAvailable = Math.max(0, batch.capacity - actualCount);
         batchObj.occupancyPercent = Math.round((actualCount / (batch.capacity || 20)) * 100);
