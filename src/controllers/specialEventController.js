@@ -306,14 +306,14 @@ const createSpecialEvent = async (req, res, next) => {
       accessLabel: accessLabel ? String(accessLabel).trim() : "Zoom Live",
       altAccessOptions: Array.isArray(altAccessOptions)
         ? altAccessOptions
-            .filter((o) => o && o.label && Number(o.price) > 0)
-            .map((o) => ({
-              platform: String(o.platform || "other").toLowerCase().trim(),
-              label: String(o.label).trim(),
-              price: Number(o.price),
-              url: o.url ? String(o.url).trim() : "",
-              note: o.note ? String(o.note).trim() : ""
-            }))
+          .filter((o) => o && o.label && Number(o.price) > 0)
+          .map((o) => ({
+            platform: String(o.platform || "other").toLowerCase().trim(),
+            label: String(o.label).trim(),
+            price: Number(o.price),
+            url: o.url ? String(o.url).trim() : "",
+            note: o.note ? String(o.note).trim() : ""
+          }))
         : [],
       timingSlot: normalizedSlots[0] || String(timingSlot).trim(),
       slots: normalizedSlots,
@@ -407,14 +407,14 @@ const updateSpecialEvent = async (req, res, next) => {
     if (req.body.altAccessOptions !== undefined) {
       event.altAccessOptions = Array.isArray(req.body.altAccessOptions)
         ? req.body.altAccessOptions
-            .filter((o) => o && o.label && Number(o.price) > 0)
-            .map((o) => ({
-              platform: String(o.platform || "other").toLowerCase().trim(),
-              label: String(o.label).trim(),
-              price: Number(o.price),
-              url: o.url ? String(o.url).trim() : "",
-              note: o.note ? String(o.note).trim() : ""
-            }))
+          .filter((o) => o && o.label && Number(o.price) > 0)
+          .map((o) => ({
+            platform: String(o.platform || "other").toLowerCase().trim(),
+            label: String(o.label).trim(),
+            price: Number(o.price),
+            url: o.url ? String(o.url).trim() : "",
+            note: o.note ? String(o.note).trim() : ""
+          }))
         : [];
     }
 
