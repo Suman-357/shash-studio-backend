@@ -62,6 +62,11 @@ const registrationSchema = new mongoose.Schema(
       default: null,
       index: true
     },
+    pricingTier: {
+      type: String,
+      enum: ["standard", "youtube_member"],
+      default: "standard"
+    },
     slot: {
       type: String,
       required: [true, "Batch slot is required"],

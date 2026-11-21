@@ -56,23 +56,26 @@ const ensureDefaultSpecialEvent = async () => {
       endDate: new Date("2026-12-20T01:30:00.000Z"),
       duration: "21 Days · 60 Mins Daily",
       ageLimit: "14 years & above",
-      accessLabel: "Zoom Live",
-      altAccessOptions: DEFAULT_ALT_ACCESS_OPTIONS,
+      accessLabel: "Live Zoom Classes",
+      altAccessOptions: [],
       timingSlot: "4:30 – 5:30 AM IST",
       slots: ["4:30 – 5:30 AM IST"],
       price: 699,
+      memberPrice: 549,
+      memberPriceLabel: "YouTube Members",
+      paymentNote: "One-time payment for whole 21 days (Zoom live class + WhatsApp group access)",
       originalPrice: 999,
       capacity: 50,
       enrolledCount: 0,
       description:
-        "Transform your daily routine with our flagship 21 Days Yoga Challenge starting 30th November. Build strength, flexibility, mindful breathing, and lasting consistency live on Zoom with Sushii in Kannada & English.",
+        "Transform your daily routine with our flagship 21 Days Yoga Challenge starting 30th November. One-time payment for all 21 days includes live interactive Zoom classes and dedicated WhatsApp group access.",
       descriptionKn:
-        "ನವೆಂಬರ್ 30 ರಿಂದ ಆರಂಭವಾಗುವ ನಮ್ಮ ವಿಶೇಷ 21 ದಿನಗಳ ಯೋಗ ಚಾಲೆಂಜ್ ಮೂಲಕ ನಿಮ್ಮ ದೈನಂದಿನ ಆರೋಗ್ಯವನ್ನು ರೂಪಿಸಿಕೊಳ್ಳಿ. ಕನ್ನಡ ಮತ್ತು ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ ಜೂಮ್ ಮೂಲಕ ನೇರ ತರಗತಿಗಳು.",
+        "ನವೆಂಬರ್ 30 ರಿಂದ ಆರಂಭವಾಗುವ ನಮ್ಮ ವಿಶೇಷ 21 ದಿನಗಳ ಯೋಗ ಚಾಲೆಂಜ್. ಸಂಪೂರ್ಣ 21 ದಿನಗಳಿಗೆ ಒಮ್ಮೆ ಮಾತ್ರ ಪಾವತಿ — ಜೂಮ್ ಲೈವ್ ತರಗತಿ ಮತ್ತು ವಾಟ್ಸಾಪ್ ಗ್ರೂಪ್ ಪ್ರವೇಶ ಒಳಗೊಂಡಿದೆ.",
       highlights: [
-        "21 Days Interactive Zoom Live Sessions with Sushii",
+        "One-Time Payment for Whole 21 Days",
+        "Live Zoom Class + WhatsApp Group Access",
         "Age Limit: 14 Years & Above",
-        "Bilingual Instruction in Kannada & English",
-        "24-Hour Class Replays & WhatsApp Community"
+        "Bilingual Instruction in Kannada & English"
       ],
       instructorName: "Sushii",
       image: "challenge-21",
@@ -238,6 +241,9 @@ const createSpecialEvent = async (req, res, next) => {
       timingSlot,
       slots,
       price,
+      memberPrice,
+      memberPriceLabel,
+      paymentNote,
       originalPrice,
       capacity,
       description,
@@ -318,6 +324,11 @@ const createSpecialEvent = async (req, res, next) => {
       timingSlot: normalizedSlots[0] || String(timingSlot).trim(),
       slots: normalizedSlots,
       price: parsedPrice,
+      memberPrice: Math.max(0, Number(memberPrice) || 0),
+      memberPriceLabel: memberPriceLabel ? String(memberPriceLabel).trim() : "YouTube Members",
+      paymentNote: paymentNote
+        ? String(paymentNote).trim()
+        : "One-time payment for whole 21 days (Zoom live class + WhatsApp group access)",
       originalPrice: Number(originalPrice) || 0,
       capacity: Math.max(1, Number(capacity) || 50),
       description: String(description).trim(),
@@ -362,6 +373,9 @@ const updateSpecialEvent = async (req, res, next) => {
       "accessLabel",
       "timingSlot",
       "price",
+      "memberPrice",
+      "memberPriceLabel",
+      "paymentNote",
       "originalPrice",
       "capacity",
       "description",
@@ -382,6 +396,8 @@ const updateSpecialEvent = async (req, res, next) => {
             return next(ApiError.badRequest("Registration amount must be at least ₹1."));
           }
           event.price = parsedPrice;
+        } else if (field === "memberPrice") {
+          event.memberPrice = Math.max(0, Number(req.body.memberPrice) || 0);
         } else if (field === "originalPrice") {
           event.originalPrice = Math.max(0, Number(req.body.originalPrice) || 0);
         } else if (field === "capacity") {
@@ -482,6 +498,7 @@ const registerForSpecialEvent = async (req, res, next) => {
       whatsapp,
       email,
       slot,
+      pricingTier,
       languagePref,
       healthNotes,
       consentGiven
@@ -544,9 +561,16 @@ const registerForSpecialEvent = async (req, res, next) => {
       req.ip ||
       "";
 
-    const displayTitle = event.eventDateLabel
+    const isMemberTier = pricingTier === "youtube_member" && typeof event.memberPrice === "number" && event.memberPrice > 0;
+    const resolvedPricingTier = isMemberTier ? "youtube_member" : "standard";
+    const resolvedAmount = isMemberTier ? event.memberPrice : event.price;
+
+    const baseTitle = event.eventDateLabel
       ? `${event.title} · ${event.eventDateLabel}`
       : event.title;
+    const displayTitle = isMemberTier
+      ? `${baseTitle} (${event.memberPriceLabel || "YouTube Member"})`
+      : baseTitle;
 
     const registration = await Registration.create({
       fullName: fullName.trim(),
@@ -556,13 +580,14 @@ const registerForSpecialEvent = async (req, res, next) => {
       workshopTitle: displayTitle,
       registrationType: "special_event",
       specialEventId: event._id,
+      pricingTier: resolvedPricingTier,
       slot: resolvedSlot,
       originalSlotSnapshot: {
         slotTime: resolvedSlot,
         batchTitle: displayTitle,
         bookedAt: new Date()
       },
-      amount: event.price,
+      amount: resolvedAmount,
       languagePref: languagePref || "both",
       healthNotes: healthNotes || "beginner",
       paymentMethod: "razorpay",

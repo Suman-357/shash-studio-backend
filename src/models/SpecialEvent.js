@@ -104,6 +104,21 @@ const specialEventSchema = new mongoose.Schema(
       required: [true, "Registration amount is required"],
       min: [1, "Registration amount must be at least ₹1"]
     },
+    memberPrice: {
+      type: Number,
+      default: 0,
+      min: 0 // e.g. 549 for YouTube Members
+    },
+    memberPriceLabel: {
+      type: String,
+      trim: true,
+      default: "YouTube Members"
+    },
+    paymentNote: {
+      type: String,
+      trim: true,
+      default: "One-time payment for whole 21 days (Zoom live class + WhatsApp group access)"
+    },
     originalPrice: {
       type: Number,
       default: 0,

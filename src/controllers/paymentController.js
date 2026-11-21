@@ -139,11 +139,17 @@ const createOrder = async (req, res, next) => {
         return next(ApiError.badRequest("This special event batch is currently full."));
       }
 
-      if (typeof specialEvent.price !== "number" || specialEvent.price <= 0) {
+      const isMemberTier =
+        reg.pricingTier === "youtube_member" &&
+        typeof specialEvent.memberPrice === "number" &&
+        specialEvent.memberPrice > 0;
+      const authoritativePrice = isMemberTier ? specialEvent.memberPrice : specialEvent.price;
+
+      if (typeof authoritativePrice !== "number" || authoritativePrice <= 0) {
         return next(ApiError.badRequest("This special event cannot be paid online."));
       }
 
-      amountInRupees = specialEvent.price;
+      amountInRupees = authoritativePrice;
       itemTitle = specialEvent.eventDateLabel
         ? `${specialEvent.title} · ${specialEvent.eventDateLabel}`
         : specialEvent.title;
