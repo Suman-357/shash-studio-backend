@@ -60,7 +60,7 @@ const createRegistration = async (req, res, next) => {
       return next(ApiError.badRequest(`This workshop batch is fully booked. Please choose another offering or contact us on WhatsApp.`));
     }
 
-    if (typeof fullName !== "string" || typeof whatsapp !== "string" || typeof email !== "string") {
+    if (typeof fullName !== "string" || typeof whatsapp !== "string" || (email !== undefined && typeof email !== "string")) {
       return next(ApiError.badRequest("Invalid input format for student registration details."));
     }
 
@@ -70,7 +70,7 @@ const createRegistration = async (req, res, next) => {
     const registration = await Registration.create({
       fullName: fullName.trim(),
       whatsapp: whatsapp.trim(),
-      email: email.trim().toLowerCase(),
+      email: email ? email.trim().toLowerCase() : "",
       workshopId: workshop.slug || workshopId,
       workshopTitle: finalTitle || workshopTitle || "SHASH Studios Batch",
       slot,
