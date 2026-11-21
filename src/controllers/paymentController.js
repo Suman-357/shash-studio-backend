@@ -5,6 +5,7 @@ const Registration = require("../models/Registration");
 const ProductOrder = require("../models/ProductOrder");
 const Workshop = require("../models/Workshop");
 const Product = require("../models/Product");
+const SpecialEvent = require("../models/SpecialEvent");
 const ApiResponse = require("../utils/apiResponse");
 const ApiError = require("../utils/apiError");
 
@@ -101,6 +102,56 @@ const createOrder = async (req, res, next) => {
       reg.amount = amountInRupees;
       await reg.save();
 
+    // ──── 1b. Special Event Payment Order ────
+    } else if (type === "special_event") {
+      if (!resolvedBookingId) {
+        return next(ApiError.badRequest("bookingId is required to create a special event payment order."));
+      }
+
+      const reg = await Registration.findOne({ bookingId: resolvedBookingId });
+      if (!reg) {
+        return next(ApiError.notFound(`Registration record not found for booking: ${resolvedBookingId}`));
+      }
+
+      if (reg.paymentStatus === "completed") {
+        return next(ApiError.badRequest("This special event registration has already been paid."));
+      }
+
+      if (reg.registrationType !== "special_event" || !reg.specialEventId) {
+        return next(ApiError.badRequest("Booking record is not bound to a special event."));
+      }
+
+      const specialEvent = await SpecialEvent.findById(reg.specialEventId);
+      if (
+        !specialEvent ||
+        !specialEvent.isActive ||
+        specialEvent.status === "cancelled" ||
+        specialEvent.status === "completed"
+      ) {
+        return next(ApiError.notFound("This special event is no longer open for payment."));
+      }
+
+      const paidCount = await Registration.countDocuments({
+        specialEventId: specialEvent._id,
+        paymentStatus: "completed",
+      });
+      if (specialEvent.status === "full" || paidCount >= (specialEvent.capacity || 50)) {
+        return next(ApiError.badRequest("This special event batch is currently full."));
+      }
+
+      if (typeof specialEvent.price !== "number" || specialEvent.price <= 0) {
+        return next(ApiError.badRequest("This special event cannot be paid online."));
+      }
+
+      amountInRupees = specialEvent.price;
+      itemTitle = specialEvent.eventDateLabel
+        ? `${specialEvent.title} · ${specialEvent.eventDateLabel}`
+        : specialEvent.title;
+
+      // Sync authoritative price on registration record
+      reg.amount = amountInRupees;
+      await reg.save();
+
     // ──── 2. Product Payment Order ────
     } else if (type === "product") {
       if (!resolvedOrderId) {
@@ -162,7 +213,7 @@ const createOrder = async (req, res, next) => {
       await prodOrder.save();
 
     } else {
-      return next(ApiError.badRequest("type must be 'workshop' or 'product'."));
+      return next(ApiError.badRequest("type must be 'workshop', 'special_event', or 'product'."));
     }
 
     if (amountInRupees <= 0) {
@@ -189,7 +240,7 @@ const createOrder = async (req, res, next) => {
     const order = await razorpay.orders.create(options);
 
     // Cryptographically/Data-bind the Razorpay Order ID to the existing registration or product order record
-    if (type === "workshop" && resolvedBookingId) {
+    if ((type === "workshop" || type === "special_event") && resolvedBookingId) {
       await Registration.findOneAndUpdate(
         { bookingId: resolvedBookingId },
         { razorpayOrderId: order.id }
@@ -238,12 +289,12 @@ const verifyPayment = async (req, res, next) => {
       return next(ApiError.badRequest("Missing Razorpay payment verification parameters."));
     }
 
-    if (type !== "workshop" && type !== "product") {
+    if (type !== "workshop" && type !== "special_event" && type !== "product") {
       return next(ApiError.badRequest("Invalid payment type."));
     }
 
-    if (type === "workshop" && !bookingId) {
-      return next(ApiError.badRequest("bookingId is required for workshop payment verification."));
+    if ((type === "workshop" || type === "special_event") && !bookingId) {
+      return next(ApiError.badRequest("bookingId is required for registration payment verification."));
     }
 
     if (type === "product" && !orderId) {
@@ -264,7 +315,7 @@ const verifyPayment = async (req, res, next) => {
     const isAuthentic = timingSafeEqual(expectedSignature, razorpay_signature);
 
     if (!isAuthentic) {
-      if (type === "workshop" && bookingId) {
+      if ((type === "workshop" || type === "special_event") && bookingId) {
         await Registration.findOneAndUpdate(
           { bookingId: String(bookingId).toUpperCase(), paymentStatus: { $ne: "completed" } },
           { paymentStatus: "failed" }
@@ -286,7 +337,7 @@ const verifyPayment = async (req, res, next) => {
     const [claimedByRegistration, claimedByProductOrder] = await Promise.all([
       Registration.findOne({
         razorpayPaymentId: razorpay_payment_id,
-        ...(type === "workshop" ? { bookingId: { $ne: normalizedBookingId } } : {}),
+        ...(type === "workshop" || type === "special_event" ? { bookingId: { $ne: normalizedBookingId } } : {}),
       }),
       ProductOrder.findOne({
         razorpayPaymentId: razorpay_payment_id,
@@ -314,7 +365,7 @@ const verifyPayment = async (req, res, next) => {
     // 4. ---- Validate Order Binding & Amount, Then Update Record Idempotently ----
     let updatedRecord = null;
 
-    if (type === "workshop") {
+    if (type === "workshop" || type === "special_event") {
       const reg = await Registration.findOne({ bookingId: normalizedBookingId });
       if (!reg) {
         return next(ApiError.notFound(`Registration record not found for booking: ${normalizedBookingId}`));
@@ -322,12 +373,12 @@ const verifyPayment = async (req, res, next) => {
 
       // Enforce strict binding: the Razorpay order ID must match the one generated for this booking
       if (!reg.razorpayOrderId || reg.razorpayOrderId !== razorpay_order_id) {
-        return next(ApiError.badRequest("Order ID does not match this workshop booking."));
+        return next(ApiError.badRequest("Order ID does not match this registration booking."));
       }
 
       const expectedPaise = Math.round((reg.amount || 0) * 100);
       if (expectedPaise <= 0 || rzpOrder.amount !== expectedPaise) {
-        return next(ApiError.badRequest("Paid amount does not match workshop registration amount."));
+        return next(ApiError.badRequest("Paid amount does not match registration amount."));
       }
 
       const isAlreadyCompleted = reg.paymentStatus === "completed";
@@ -339,12 +390,24 @@ const verifyPayment = async (req, res, next) => {
       reg.razorpaySignature = razorpay_signature;
       updatedRecord = await reg.save();
 
-      // Decrement spotsLeft once upon successful payment
+      // Update inventory/capacity once upon successful payment
       if (!isAlreadyCompleted) {
-        await Workshop.findOneAndUpdate(
-          { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
-          { $inc: { spotsLeft: -1 } }
-        );
+        if (reg.registrationType === "special_event" && reg.specialEventId) {
+          const updatedEvent = await SpecialEvent.findByIdAndUpdate(
+            reg.specialEventId,
+            { $inc: { enrolledCount: 1 } },
+            { new: true }
+          );
+          if (updatedEvent && updatedEvent.enrolledCount >= updatedEvent.capacity && updatedEvent.status === "open") {
+            updatedEvent.status = "full";
+            await updatedEvent.save();
+          }
+        } else {
+          await Workshop.findOneAndUpdate(
+            { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
+            { $inc: { spotsLeft: -1 } }
+          );
+        }
       }
     }
 
@@ -391,7 +454,7 @@ const verifyPayment = async (req, res, next) => {
       {
         verified: true,
         type,
-        ...(type === "workshop" && updatedRecord
+        ...((type === "workshop" || type === "special_event") && updatedRecord
           ? {
               bookingId: updatedRecord.bookingId,
               paymentStatus: updatedRecord.paymentStatus,
@@ -496,10 +559,22 @@ const handleWebhook = async (req, res, next) => {
             reg.razorpayPaymentId = rzpPaymentId;
             await reg.save();
 
-            await Workshop.findOneAndUpdate(
-              { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
-              { $inc: { spotsLeft: -1 } }
-            );
+            if (reg.registrationType === "special_event" && reg.specialEventId) {
+              const updatedEvent = await SpecialEvent.findByIdAndUpdate(
+                reg.specialEventId,
+                { $inc: { enrolledCount: 1 } },
+                { new: true }
+              );
+              if (updatedEvent && updatedEvent.enrolledCount >= updatedEvent.capacity && updatedEvent.status === "open") {
+                updatedEvent.status = "full";
+                await updatedEvent.save();
+              }
+            } else {
+              await Workshop.findOneAndUpdate(
+                { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
+                { $inc: { spotsLeft: -1 } }
+              );
+            }
           } else {
             console.error(
               `Webhook amount mismatch for booking ${reg.bookingId}: expected ${expectedPaise}, got ${paidAmountPaise}`

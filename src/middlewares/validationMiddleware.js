@@ -15,8 +15,8 @@ const validateRegistration = (req, res, next) => {
     errors.push("A valid 10 to 12 digit WhatsApp number is required");
   }
 
-  if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
-    errors.push("A valid email address is required");
+  if (email && String(email).trim() !== "" && !/^\S+@\S+\.\S+$/.test(String(email).trim())) {
+    errors.push("Please enter a valid email address");
   }
 
   if (!workshopId) {
@@ -34,7 +34,7 @@ const validateRegistration = (req, res, next) => {
   // Sanitize
   req.body.fullName = fullName.trim();
   req.body.whatsapp = String(whatsapp).replace(/[^0-9]/g, "");
-  req.body.email = email.trim().toLowerCase();
+  req.body.email = email ? String(email).trim().toLowerCase() : "";
 
   next();
 };

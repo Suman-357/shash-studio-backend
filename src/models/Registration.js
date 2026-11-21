@@ -25,10 +25,13 @@ const registrationSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: [true, "Email address is required"],
       trim: true,
       lowercase: true,
-      match: [/^\S+@\S+\.\S+$/, "Please enter a valid email address"],
+      default: "",
+      validate: {
+        validator: (v) => !v || /^\S+@\S+\.\S+$/.test(v),
+        message: "Please enter a valid email address"
+      },
       index: true
     },
     workshopId: {
@@ -44,6 +47,18 @@ const registrationSchema = new mongoose.Schema(
     batchId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Batch",
+      default: null,
+      index: true
+    },
+    registrationType: {
+      type: String,
+      enum: ["workshop", "special_event"],
+      default: "workshop",
+      index: true
+    },
+    specialEventId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SpecialEvent",
       default: null,
       index: true
     },

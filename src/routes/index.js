@@ -9,6 +9,7 @@ const authRoutes = require("./authRoutes");
 const sectionRoutes = require("./sectionRoutes");
 const productRoutes = require("./productRoutes");
 const paymentRoutes = require("./paymentRoutes");
+const specialEventRoutes = require("./specialEventRoutes");
 
 // Health check
 router.get("/health", (req, res) => {
@@ -29,5 +30,6 @@ router.use("/auth", authRoutes);
 router.use("/sections", sectionRoutes);
 router.use("/products", productRoutes);
 router.use("/payments", paymentRoutes);
+router.use("/special-events", specialEventRoutes);
 
 module.exports = router;
