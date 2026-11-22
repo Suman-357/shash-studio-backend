@@ -16,6 +16,7 @@ const createRegistration = async (req, res, next) => {
       email,
       workshopId,
       workshopTitle,
+      batchId,
       slot,
       amount,
       languagePref,
@@ -73,6 +74,7 @@ const createRegistration = async (req, res, next) => {
       email: email ? email.trim().toLowerCase() : "",
       workshopId: workshop.slug || workshopId,
       workshopTitle: finalTitle || workshopTitle || "SHASH Studios Batch",
+      ...(batchId && /^[0-9a-fA-F]{24}$/.test(String(batchId)) ? { batchId } : {}),
       slot,
       originalSlotSnapshot: {
         slotTime: slot,

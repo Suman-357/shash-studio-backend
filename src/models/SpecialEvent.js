@@ -166,6 +166,11 @@ const specialEventSchema = new mongoose.Schema(
       trim: true,
       default: ""
     },
+    whatsappGroupLink: {
+      type: String,
+      trim: true,
+      default: ""
+    },
     status: {
       type: String,
       enum: ["upcoming", "open", "full", "completed", "cancelled"],

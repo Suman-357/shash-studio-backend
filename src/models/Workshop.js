@@ -122,6 +122,11 @@ const workshopSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    whatsappGroupLink: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     isActive: {
       type: Boolean,
       default: true,

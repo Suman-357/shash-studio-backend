@@ -156,6 +156,7 @@ const getSpecialEvents = async (req, res, next) => {
         const evObj = ev.toObject();
         if (!admin) {
           delete evObj.zoomLink;
+          delete evObj.whatsappGroupLink;
         }
         evObj.enrolledCount = paidCount;
         evObj.spotsAvailable = Math.max(0, (ev.capacity || 50) - paidCount);
@@ -209,6 +210,7 @@ const getSpecialEventById = async (req, res, next) => {
       evObj.students = paidRegistrations;
     } else {
       delete evObj.zoomLink;
+      delete evObj.whatsappGroupLink;
     }
 
     return ApiResponse.success(res, evObj, "Special event details retrieved");
@@ -251,6 +253,7 @@ const createSpecialEvent = async (req, res, next) => {
       instructorName,
       image,
       zoomLink,
+      whatsappGroupLink,
       status,
       isFeatured,
       isActive
@@ -336,6 +339,7 @@ const createSpecialEvent = async (req, res, next) => {
       instructorName: instructorName ? String(instructorName).trim() : "Sushii",
       image: image ? String(image).trim() : "challenge-21",
       zoomLink: zoomLink ? String(zoomLink).trim() : "",
+      whatsappGroupLink: whatsappGroupLink ? String(whatsappGroupLink).trim() : "",
       status: status || "open",
       isFeatured: isFeatured !== undefined ? Boolean(isFeatured) : true,
       isActive: isActive !== undefined ? Boolean(isActive) : true
@@ -382,6 +386,7 @@ const updateSpecialEvent = async (req, res, next) => {
       "instructorName",
       "image",
       "zoomLink",
+      "whatsappGroupLink",
       "status",
       "isFeatured",
       "isActive"

@@ -61,6 +61,11 @@ const batchSchema = new mongoose.Schema(
       trim: true,
       default: ""
     },
+    whatsappGroupLink: {
+      type: String,
+      trim: true,
+      default: ""
+    },
     instructorName: {
       type: String,
       default: "Sushii & Team",

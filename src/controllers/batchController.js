@@ -69,6 +69,7 @@ const getBatches = async (req, res, next) => {
         const batchObj = batch.toObject();
         if (!isAdminRequest) {
           delete batchObj.zoomLink;
+          delete batchObj.whatsappGroupLink;
         }
         batchObj.enrolledCount = actualCount;
         batchObj.spotsAvailable = Math.max(0, batch.capacity - actualCount);
@@ -135,6 +136,7 @@ const createBatch = async (req, res, next) => {
       endDate,
       capacity = 20,
       zoomLink = "",
+      whatsappGroupLink = "",
       instructorName = "Sushii & Team"
     } = req.body;
 
@@ -155,6 +157,7 @@ const createBatch = async (req, res, next) => {
       endDate: endDate || new Date(Date.now() + 21 * 24 * 60 * 60 * 1000), // Default 21 days
       capacity: Number(capacity),
       zoomLink,
+      whatsappGroupLink: String(whatsappGroupLink || "").trim(),
       instructorName
     });
 
@@ -171,7 +174,7 @@ const createBatch = async (req, res, next) => {
  */
 const updateBatch = async (req, res, next) => {
   try {
-    const { title, titleKn, section, slotTime, capacity, status, zoomLink, instructorName, startDate, endDate } = req.body;
+    const { title, titleKn, section, slotTime, capacity, status, zoomLink, whatsappGroupLink, instructorName, startDate, endDate } = req.body;
 
     const batch = await Batch.findById(req.params.id);
     if (!batch) {
@@ -187,6 +190,7 @@ const updateBatch = async (req, res, next) => {
     if (capacity !== undefined) batch.capacity = Number(capacity);
     if (status) batch.status = status;
     if (zoomLink !== undefined) batch.zoomLink = zoomLink;
+    if (whatsappGroupLink !== undefined) batch.whatsappGroupLink = String(whatsappGroupLink || "").trim();
     if (instructorName) batch.instructorName = instructorName;
     if (startDate) batch.startDate = startDate;
     if (endDate) batch.endDate = endDate;

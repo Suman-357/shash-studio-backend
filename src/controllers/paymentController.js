@@ -4,6 +4,7 @@ const env = require("../config/env");
 const Registration = require("../models/Registration");
 const ProductOrder = require("../models/ProductOrder");
 const Workshop = require("../models/Workshop");
+const Batch = require("../models/Batch");
 const Product = require("../models/Product");
 const SpecialEvent = require("../models/SpecialEvent");
 const ApiResponse = require("../utils/apiResponse");
@@ -370,6 +371,7 @@ const verifyPayment = async (req, res, next) => {
 
     // 4. ---- Validate Order Binding & Amount, Then Update Record Idempotently ----
     let updatedRecord = null;
+    let unlockedWhatsappGroupLink = "";
 
     if (type === "workshop" || type === "special_event") {
       const reg = await Registration.findOne({ bookingId: normalizedBookingId });
@@ -396,9 +398,9 @@ const verifyPayment = async (req, res, next) => {
       reg.razorpaySignature = razorpay_signature;
       updatedRecord = await reg.save();
 
-      // Update inventory/capacity once upon successful payment
-      if (!isAlreadyCompleted) {
-        if (reg.registrationType === "special_event" && reg.specialEventId) {
+      // Update inventory/capacity once upon successful payment & resolve private WhatsApp Group invite link
+      if (reg.registrationType === "special_event" && reg.specialEventId) {
+        if (!isAlreadyCompleted) {
           const updatedEvent = await SpecialEvent.findByIdAndUpdate(
             reg.specialEventId,
             { $inc: { enrolledCount: 1 } },
@@ -408,12 +410,38 @@ const verifyPayment = async (req, res, next) => {
             updatedEvent.status = "full";
             await updatedEvent.save();
           }
+          unlockedWhatsappGroupLink = updatedEvent?.whatsappGroupLink || "";
         } else {
+          const ev = await SpecialEvent.findById(reg.specialEventId).select("whatsappGroupLink");
+          unlockedWhatsappGroupLink = ev?.whatsappGroupLink || "";
+        }
+      } else {
+        if (!isAlreadyCompleted) {
           await Workshop.findOneAndUpdate(
             { slug: reg.workshopId, spotsLeft: { $gt: 0 } },
             { $inc: { spotsLeft: -1 } }
           );
         }
+        // Resolve WhatsApp Group Link: prefer specific Batch link, then Workshop link
+        const workshopDoc = await Workshop.findOne({ slug: reg.workshopId }).select("_id whatsappGroupLink");
+        let batchDoc = null;
+        if (reg.batchId) {
+          batchDoc = await Batch.findById(reg.batchId).select("whatsappGroupLink");
+        }
+        if (!batchDoc && workshopDoc) {
+          batchDoc = await Batch.findOne({
+            workshopId: workshopDoc._id,
+            slotTime: reg.slot
+          }).select("whatsappGroupLink");
+        }
+        if (!batchDoc && workshopDoc) {
+          batchDoc = await Batch.findOne({
+            workshopId: workshopDoc._id,
+            whatsappGroupLink: { $ne: "" }
+          }).select("whatsappGroupLink");
+        }
+        unlockedWhatsappGroupLink =
+          batchDoc?.whatsappGroupLink || workshopDoc?.whatsappGroupLink || "";
       }
     }
 
@@ -465,6 +493,7 @@ const verifyPayment = async (req, res, next) => {
               bookingId: updatedRecord.bookingId,
               paymentStatus: updatedRecord.paymentStatus,
               amount: updatedRecord.amount,
+              ...(unlockedWhatsappGroupLink ? { whatsappGroupLink: unlockedWhatsappGroupLink } : {}),
             }
           : {}),
         ...(type === "product" && updatedRecord
